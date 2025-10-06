@@ -9,6 +9,7 @@ from pathlib import Path
 
 import anyio
 import httpx
+from beartype import beartype
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,14 @@ class UFAClient:
         self.max_retries = max_retries
         self.org_key = org_key
 
-    async def download_file(self, file_path: str, org_key: str) -> str:
+    @beartype
+    async def download_file(
+        self,
+        *,
+        file_path: str,
+        org_key: str,
+        download_dir: str | Path | None = None,
+    ) -> str:
         """
         Fetch file content from UFA service with retry logic
 
@@ -45,6 +53,9 @@ class UFAClient:
             The UFA file path
         org_key : str
             Organization key for authentication
+        download_dir : str | Path | None
+            Directory in which to save the downloaded file. If None, uses the
+            current working directory. The directory is created if needed.
 
         Returns
         -------
@@ -59,7 +70,9 @@ class UFAClient:
 
         clean_path = file_path.lstrip("/")
         filename = os.path.basename(clean_path) or "downloaded_file"
-        destination_path = Path.cwd() / filename
+        target_dir = Path(download_dir) if download_dir is not None else Path.cwd()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        destination_path = target_dir / filename
 
         # If the file already exists locally, do not download again
         if destination_path.exists():
@@ -116,6 +129,7 @@ class UFAClient:
 
     async def upload_file(
         self,
+        *,
         local_file_path: str,
         org_key: str,
         remote_file_path: str,

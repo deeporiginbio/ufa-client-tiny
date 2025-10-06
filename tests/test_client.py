@@ -103,19 +103,17 @@ def test_download_file(tmp_path: Path, local_path: Path, ufa_client: UFAClient) 
         )
     )
 
-    # Read original bytes before changing cwd to tmp_path
+    # Read original bytes for integrity check
     original_bytes = Path(local_path).read_bytes()
 
-    # Change working directory so downloads land in `tmp_path`.
-    cwd_before = Path.cwd()
-    os.chdir(tmp_path)
-    try:
-        downloaded_path_str = asyncio.run(
-            ufa_client.download_file(file_path=remote_path, org_key=ORG_KEY)
+    # Download directly into tmp_path using the new argument
+    downloaded_path_str = asyncio.run(
+        ufa_client.download_file(
+            file_path=remote_path, org_key=ORG_KEY, download_dir=tmp_path
         )
-        downloaded_path = Path(downloaded_path_str)
-        assert downloaded_path.exists()
-        assert downloaded_path.name == Path(remote_path).name
-        assert downloaded_path.read_bytes() == original_bytes
-    finally:
-        os.chdir(cwd_before)
+    )
+    downloaded_path = Path(downloaded_path_str)
+    assert downloaded_path.exists()
+    assert downloaded_path.parent.resolve() == tmp_path.resolve()
+    assert downloaded_path.name == Path(remote_path).name
+    assert downloaded_path.read_bytes() == original_bytes
