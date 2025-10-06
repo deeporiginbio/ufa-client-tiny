@@ -9,9 +9,7 @@ then download them back to validate integrity.
 
 import asyncio
 import json
-import os
 from pathlib import Path
-from typing import Iterable
 
 import pytest
 
@@ -77,7 +75,6 @@ def test_upload_file(local_path: Path, ufa_client: UFAClient) -> None:
     asyncio.run(
         ufa_client.upload_file(
             local_file_path=str(local_path),
-            org_key=ORG_KEY,
             remote_file_path=remote_path,
         )
     )
@@ -98,7 +95,6 @@ def test_download_file(tmp_path: Path, local_path: Path, ufa_client: UFAClient) 
     asyncio.run(
         ufa_client.upload_file(
             local_file_path=str(local_path),
-            org_key=ORG_KEY,
             remote_file_path=remote_path,
         )
     )
@@ -109,7 +105,8 @@ def test_download_file(tmp_path: Path, local_path: Path, ufa_client: UFAClient) 
     # Download directly into tmp_path using the new argument
     downloaded_path_str = asyncio.run(
         ufa_client.download_file(
-            file_path=remote_path, org_key=ORG_KEY, download_dir=tmp_path
+            remote_file_path=remote_path,
+            download_dir=tmp_path,
         )
     )
     downloaded_path = Path(downloaded_path_str)

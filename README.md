@@ -15,7 +15,6 @@ client = UFAClient(base_url="https://api.edge.deeporigin.io/files/", token="..."
 out_path = asyncio.run(
     client.download_file(
         file_path="tests/ufa/ligand.sdf",
-        org_key="deeporigin",
         download_dir=Path("/tmp/ufa-downloads")
     )
 )

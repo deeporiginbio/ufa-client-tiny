@@ -4,7 +4,7 @@
 *py.typed
 *.ipynb
 *.ipynb_checkpoints
-src/ufa_client_tiny/_version.py
+src/ufa/_version.py
 
 
 

@@ -6,6 +6,7 @@ import logging
 import mimetypes
 import os
 from pathlib import Path
+from urllib.parse import quote
 
 import anyio
 import httpx
@@ -25,7 +26,8 @@ class UFAClient:
         max_retries: int = 3,
         org_key: str,
     ):
-        self.base_url = base_url
+        # Normalize base_url to avoid accidental double slashes in constructed URLs
+        self.base_url = base_url.rstrip("/")
         if not token:
             raise ValueError("UFAClient requires a non-empty bearer token")
         self.token = token
@@ -40,8 +42,7 @@ class UFAClient:
     async def download_file(
         self,
         *,
-        file_path: str,
-        org_key: str,
+        remote_file_path: str,
         download_dir: str | Path | None = None,
     ) -> str:
         """
@@ -51,8 +52,6 @@ class UFAClient:
         ----------
         file_path : str
             The UFA file path
-        org_key : str
-            Organization key for authentication
         download_dir : str | Path | None
             Directory in which to save the downloaded file. If None, uses the
             current working directory. The directory is created if needed.
@@ -68,7 +67,7 @@ class UFAClient:
             If file cannot be retrieved from UFA after all retry attempts
         """
 
-        clean_path = file_path.lstrip("/")
+        clean_path = remote_file_path.lstrip("/")
         filename = os.path.basename(clean_path) or "downloaded_file"
         target_dir = Path(download_dir) if download_dir is not None else Path.cwd()
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -80,7 +79,12 @@ class UFAClient:
             return str(destination_path)
 
         async with httpx.AsyncClient() as client:
-            direct_url = f"{self.base_url}/{org_key}/{clean_path}"
+            direct_url = f"{self.base_url}/{self.org_key}/{clean_path}"
+            logger.debug(
+                "Attempting direct download: url=%s dest=%s",
+                direct_url,
+                destination_path,
+            )
 
             try:
                 response = await self._make_request(client, direct_url)
@@ -90,9 +94,16 @@ class UFAClient:
                     logger.info(f"Saved file via direct download to {destination_path}")
                     return str(destination_path)
             except httpx.HTTPError as e:
-                logger.warning(f"Direct download failed for {file_path}: {str(e)}")
+                logger.warning(
+                    "Direct download failed for %s: %s (%s)",
+                    remote_file_path,
+                    str(e),
+                    e.__class__.__name__,
+                )
 
-            signed_url = f"{self.base_url}/signedUrl/download/{org_key}/{clean_path}"
+            signed_url = (
+                f"{self.base_url}/signedUrl/download/{self.org_key}/{clean_path}"
+            )
 
             try:
                 response = await self._make_request(client, signed_url)
@@ -102,9 +113,14 @@ class UFAClient:
                     logger.info(f"Saved file via signed URL to {destination_path}")
                     return str(destination_path)
             except httpx.HTTPError as e:
-                logger.error(f"Signed URL download failed for {file_path}: {str(e)}")
+                logger.error(
+                    "Signed URL download failed for %s: %s (%s)",
+                    remote_file_path,
+                    str(e),
+                    e.__class__.__name__,
+                )
                 raise UFADownloadError(
-                    f"Failed to retrieve file from UFA after all attempts: {file_path}"
+                    f"Failed to retrieve file from UFA after all attempts: {remote_file_path}"
                 ) from None
 
     async def _make_request(
@@ -127,82 +143,81 @@ class UFAClient:
 
         raise last_exception
 
+    @beartype
     async def upload_file(
         self,
         *,
         local_file_path: str,
-        org_key: str,
         remote_file_path: str,
     ) -> object:
         """
         Upload a single file to UFA using multipart/form-data via HTTP PUT.
-
-        Parameters
-        ----------
-        local_file_path : str
-            Path to the local file on disk to upload.
-        org_key : str
-            Organization key for authentication and routing.
-        remote_file_path : str
-            The destination path in UFA (no leading slash required).
-
-        Returns
-        -------
-        object
-            Parsed JSON if the server responds with JSON, otherwise response text.
-
-        Raises
-        ------
-        FileNotFoundError
-            If the local file is missing.
-        UFAUploadError
-            If the upload fails after all retry attempts.
         """
 
         if not os.path.isfile(local_file_path):
             raise FileNotFoundError(f"Local file does not exist: {local_file_path}")
 
         clean_remote_path = remote_file_path.lstrip("/")
-        url = f"{self.base_url}/{org_key}/{clean_remote_path}"
+        encoded_remote_path = quote(clean_remote_path, safe="/")
+        url = f"{self.base_url}/{self.org_key}/{encoded_remote_path}"
 
         content_type, _ = mimetypes.guess_type(local_file_path)
         if not content_type:
             content_type = "application/octet-stream"
+        if local_file_path.lower().endswith(".xml"):
+            content_type = "text/xml"
 
         filename = os.path.basename(local_file_path)
+        file_size_bytes = os.path.getsize(local_file_path)
+        logger.info(
+            "Preparing upload: url=%s filename=%s size_bytes=%s content_type=%s",
+            url,
+            filename,
+            file_size_bytes,
+            content_type,
+        )
 
-        last_exception: Exception | None = None
+        timeout = httpx.Timeout(connect=30.0, read=300.0, write=300.0, pool=30.0)
 
-        async with httpx.AsyncClient() as client:
-            for attempt in range(self.max_retries):
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            last_exception = None
+            for attempt in range(1, self.max_retries + 1):
                 try:
-                    # Read file content asynchronously to avoid blocking the event loop
-                    async with await anyio.open_file(local_file_path, "rb") as afp:
-                        file_bytes = await afp.read()
-                    files = {"file": (filename, file_bytes, content_type)}
-                    # Do not set Content-Type header explicitly; httpx will set proper multipart boundary.
-                    response = await client.put(url, headers=self.headers, files=files)
+                    # use normal file handle, not async
+                    with open(local_file_path, "rb") as fp:
+                        files = {"file": (filename, fp, content_type)}
+                        response = await client.put(
+                            url, headers=self.headers, files=files
+                        )
                     response.raise_for_status()
 
-                    # Try to return JSON when possible
                     resp_ct = response.headers.get("content-type", "")
                     if "application/json" in resp_ct:
                         return response.json()
                     return response.text
+
                 except httpx.HTTPError as e:
                     last_exception = e
-                    if attempt < self.max_retries - 1:
-                        logger.warning(f"Upload attempt {attempt + 1} failed: {str(e)}")
-                        continue
-                    break
+                    logger.warning(
+                        "Upload attempt %d failed for %s: %s (%s)",
+                        attempt,
+                        local_file_path,
+                        str(e),
+                        e.__class__.__name__,
+                    )
+                    if attempt < self.max_retries:
+                        await anyio.sleep(2**attempt)
+                    else:
+                        break
 
         logger.error(
-            "Failed to upload file to UFA after all attempts: %s -> %s",
-            local_file_path,
-            url,
+            "Upload failed after %d attempts: %s (%s)",
+            self.max_retries,
+            str(last_exception),
+            last_exception.__class__.__name__ if last_exception else "UnknownError",
         )
         raise UFAUploadError(
-            f"Failed to upload file to UFA after all attempts: {local_file_path} -> {url}"
+            f"Failed to upload file to UFA: {local_file_path} -> {url}"
         ) from last_exception
 
 
