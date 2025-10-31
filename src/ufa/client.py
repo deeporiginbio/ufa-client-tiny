@@ -220,6 +220,66 @@ class UFAClient:
             f"Failed to upload file to UFA: {local_file_path} -> {url}"
         ) from last_exception
 
+    @beartype
+    async def list_files_in_dir(
+        self,
+        *,
+        directory_path: str,
+        continuation_token: str | None = None,
+        max_keys: int | None = None,
+    ) -> dict:
+        """
+        List files within a remote directory/prefix.
+
+        This calls the UFA directory listing endpoint and returns the parsed JSON
+        response, which includes a list of objects for each file and an optional
+        continuation token for pagination.
+
+        Parameters
+        ----------
+        directory_path : str
+            The remote directory or prefix to list (e.g. ``"tests/ufa"``).
+        continuation_token : str | None
+            Optional pagination token returned by a previous call.
+        max_keys : int | None
+            Optional maximum number of keys to return in this request if the
+            backend supports it.
+
+        Returns
+        -------
+        dict
+            Parsed JSON payload, typically with keys ``"data"`` (list of
+            entries) and ``"continuationToken"`` (str).
+        """
+
+        # The directory endpoint expects the entire prefix as a single path
+        # segment, so we percent-encode slashes as well (safe="").
+        clean_path = directory_path.strip("/")
+        encoded_path = quote(clean_path, safe="")
+
+        base = f"{self.base_url}/{self.org_key}/directory/{encoded_path}"
+
+        query_parts: list[str] = []
+        if continuation_token:
+            query_parts.append(
+                f"continuationToken={quote(continuation_token, safe='')}"
+            )
+        if isinstance(max_keys, int) and max_keys > 0:
+            query_parts.append(f"maxKeys={max_keys}")
+        url = base if not query_parts else f"{base}?{'&'.join(query_parts)}"
+
+        async with httpx.AsyncClient() as client:
+            response = await self._make_request(client, url)
+            resp_ct = response.headers.get("content-type", "")
+            if "application/json" in resp_ct:
+                return response.json()
+            # Fallback: attempt to decode JSON even if content-type is missing
+            try:
+                return response.json()
+            except ValueError:
+                logger.error("Unexpected non-JSON response for directory listing")
+                raise UFAError("Expected JSON response from directory listing endpoint")
+
 
 class UFAError(Exception):
     """Base exception for UFA client errors."""

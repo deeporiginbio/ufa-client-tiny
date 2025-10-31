@@ -114,3 +114,28 @@ def test_download_file(tmp_path: Path, local_path: Path, ufa_client: UFAClient) 
     assert downloaded_path.parent.resolve() == tmp_path.resolve()
     assert downloaded_path.name == Path(remote_path).name
     assert downloaded_path.read_bytes() == original_bytes
+
+
+def test_list_files_in_dir(ufa_client: UFAClient) -> None:
+    """Upload fixtures and verify they appear in directory listing."""
+    local_files = _iter_fixture_files()
+    if not local_files:
+        pytest.skip("no fixtures to upload")
+
+    # Ensure all fixtures are present remotely under REMOTE_PREFIX
+    for p in local_files:
+        asyncio.run(
+            ufa_client.upload_file(
+                local_file_path=str(p),
+                remote_file_path=_remote_path_for(p),
+            )
+        )
+
+    # List the directory and assert each filename is present
+    listing = asyncio.run(
+        ufa_client.list_files_in_dir(directory_path=REMOTE_PREFIX.rstrip("/"))
+    )
+    assert isinstance(listing, dict)
+    keys = [entry.get("Key", "") for entry in listing.get("data", [])]
+    for p in local_files:
+        assert any(k.endswith(p.name) for k in keys), f"Missing {p.name} in listing"
