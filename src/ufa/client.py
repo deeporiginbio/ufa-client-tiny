@@ -278,7 +278,9 @@ class UFAClient:
                 return response.json()
             except ValueError:
                 logger.error("Unexpected non-JSON response for directory listing")
-                raise UFAError("Expected JSON response from directory listing endpoint")
+                raise UFAError(
+                    "Expected JSON response from directory listing endpoint"
+                ) from None
 
 
 class UFAError(Exception):
